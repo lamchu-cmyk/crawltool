@@ -124,14 +124,24 @@ async function processHTML(distDir, baseUrl) {
         }
     });
 
-    await Promise.all(tasks);
+    const taskResults = await Promise.all(tasks);
+
+    /* -------- Lập map base URL cho từng file CSS từ CDN -------- */
+    const cssRemoteBaseMap = {};
+    taskResults.forEach(res => {
+        if (res && res.type === 'css' && res.remoteUrl) {
+            try {
+                cssRemoteBaseMap[res.localFile] = new URL('./', res.remoteUrl).href;
+            } catch {}
+        }
+    });
 
     /* ---------- Ghi lại HTML đã chỉnh ---------- */
     fs.writeFileSync(htmlPath, $.html(), 'utf-8');
     console.log('Đã cập nhật index.html');
 
     // === BỔ SUNG: Quét CSS và tải ảnh còn thiếu ===
-    await processCSS(cssDir, assetDir, baseUrl);
+    await processCSS(cssDir, assetDir, baseUrl, cssRemoteBaseMap);
     console.log('Đã quét CSS và tải tài nguyên còn thiếu!');
 }
 
@@ -139,6 +149,7 @@ async function processHTML(distDir, baseUrl) {
 async function downloadAndSwap($node, attrName, remoteUrl, saveDir) {
     // Chuẩn hóa URL (xử lý dạng //cdn...)
     if (remoteUrl.startsWith('//')) remoteUrl = 'https:' + remoteUrl;
+    const fileType = path.basename(saveDir); // css | js | asset
 
     try {
         const res = await axios.get(remoteUrl, {
@@ -156,13 +167,21 @@ async function downloadAndSwap($node, attrName, remoteUrl, saveDir) {
 
         fs.writeFileSync(path.join(saveDir, file), res.data);
         $node.attr(attrName, `./${path.basename(saveDir)}/${file}`);
+
+        // Trả về thông tin để xử lý CSS về sau
+        return {
+            type: fileType,
+            localFile: file,
+            remoteUrl
+        };
     } catch (e) {
         console.warn(`Không tải được ${remoteUrl}:`, e.message);
+        return null;
     }
 }
 
 /* ----------------- HÀM QUÉT CSS VÀ TẢI ẢNH ----------------- */
-async function processCSS(cssDir, assetDir, baseUrl) {
+async function processCSS(cssDir, assetDir, defaultBaseUrl, remoteBaseMap = {}) {
     const cssFiles = fs.readdirSync(cssDir).filter(f => f.endsWith('.css'));
 
     // Regex mới: cho phép khoảng trắng + ngoặc kép
@@ -183,9 +202,10 @@ async function processCSS(cssDir, assetDir, baseUrl) {
             if (resUrl.startsWith('//')) {
                 resUrl = 'https:' + resUrl;
             } else if (!/^https?:\/\//i.test(resUrl)) {
-                // Đường dẫn /a/b.png hoặc a/b.png → ghép với baseUrl
+                // Đường dẫn /a/b.png hoặc a/b.png → ghép với base URL tương ứng
+                const baseRoot = remoteBaseMap[file] || defaultBaseUrl;
                 try {
-                    resUrl = new URL(resUrl, baseUrl).href;
+                    resUrl = new URL(resUrl, baseRoot).href;
                 } catch {
                     return match;
                 } // Không hợp lệ → giữ nguyên
