@@ -80,6 +80,12 @@ async function processHTML(distDir, baseUrl) {
     /* ---------- Đọc & phân tích HTML ---------- */
     const $ = cheerio.load(fs.readFileSync(htmlPath, 'utf-8'));
 
+    /* ==== 1. LOẠI BỎ COMMENT HTML THỪA ==== */
+    $('*') // duyệt mọi phần tử
+        .contents() // lấy tất cả node con
+        .filter((_, el) => el.type === 'comment') // lọc node comment
+        .remove(); // xoá hẳn khỏi DOM
+
     /* ===== 1. INLINE <style> ===== */
     $('style').each((i, el) => {
         const cssContent = $(el).html();
