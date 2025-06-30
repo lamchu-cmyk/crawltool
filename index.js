@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 // Sử dụng readline để tạo prompt trên CLI
 const readline = require('readline');
 const {
@@ -159,44 +157,55 @@ async function processHTML(distDir, baseUrl) {
 
 /* ----------------- HÀM TẢI FILE CDN ----------------- */
 async function downloadAndSwap($node, attrName, remoteUrl, saveDir) {
-    // Chuẩn hóa URL (xử lý dạng //cdn...)
     if (remoteUrl.startsWith('//')) remoteUrl = 'https:' + remoteUrl;
-    const fileType = path.basename(saveDir); // css | js | asset
 
-    try {
-        const res = await axios.get(remoteUrl, {
-            responseType: 'arraybuffer'
+    /* ---- 1. Decide the final folder that the asset should live in ---- */
+    let targetDir = saveDir; // default for css / js
+    const ext = path.extname(new URL(remoteUrl).pathname) || '.bin';
+    if (path.basename(saveDir) === 'asset') { // only categorise real assets
+        const subDir = getAssetSubDir(ext);
+        targetDir = path.join(saveDir, subDir);
+        if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, {
+            recursive: true
         });
-        const ext = path.extname(new URL(remoteUrl).pathname) || '.bin';
-        const base = path.basename(new URL(remoteUrl).pathname) || 'file';
-        let file = base.includes('.') ? base : base + ext;
-
-        // Tránh trùng tên
-        let counter = 1;
-        while (fs.existsSync(path.join(saveDir, file))) {
-            file = `${path.parse(base).name}-${counter++}${ext}`;
-        }
-
-        fs.writeFileSync(path.join(saveDir, file), res.data);
-        $node.attr(attrName, `./${path.basename(saveDir)}/${file}`);
-
-        // Trả về thông tin để xử lý CSS về sau
-        return {
-            type: fileType,
-            localFile: file,
-            remoteUrl
-        };
-    } catch (e) {
-        console.warn(`Không tải được ${remoteUrl}:`, e.message);
-        return null;
     }
+
+    /* ---- 2. Resolve a unique local filename ---- */
+    const base = path.basename(new URL(remoteUrl).pathname) || 'file';
+    const file = base.includes('.') ? base : base + ext;
+    let finalName = file,
+        n = 1;
+    while (fs.existsSync(path.join(targetDir, finalName))) {
+        finalName = `${path.parse(file).name}-${n++}${ext}`;
+    }
+
+    /* ---- 3. Download & write ------------------------------------------------ */
+    const {
+        data
+    } = await axios.get(remoteUrl, {
+        responseType: 'arraybuffer'
+    });
+    fs.writeFileSync(path.join(targetDir, finalName), data);
+
+    /* ---- 4.  Update the DOM attribute so it points to the new file ---------- */
+    const relPath = path.posix.relative(
+        path.posix.dirname('/'), // root → easiest
+        path.posix.join('/', path.basename(saveDir), // '/asset'
+            path.relative(saveDir, targetDir), // 'img' | 'font'…
+            finalName) // the file
+    );
+    $node.attr(attrName, `./${relPath}`);
+
+    return {
+        type: path.basename(saveDir), // 'css', 'js', or 'asset'
+        localFile: path.join(path.relative(saveDir, targetDir), finalName),
+        remoteUrl
+    };
 }
 
 /* ----------------- HÀM QUÉT CSS VÀ TẢI ẢNH ----------------- */
 async function processCSS(cssDir, assetDir, defaultBaseUrl, remoteBaseMap = {}) {
     const cssFiles = fs.readdirSync(cssDir).filter(f => f.endsWith('.css'));
-
-    // Regex mới: cho phép khoảng trắng + ngoặc kép
     const urlRegex = /url\(\s*(['"]?)([^'")]+)\1\s*\)/g;
 
     for (const file of cssFiles) {
@@ -206,39 +215,41 @@ async function processCSS(cssDir, assetDir, defaultBaseUrl, remoteBaseMap = {}) 
 
         content = content.replace(urlRegex, (match, quote, raw) => {
             let resUrl = raw.trim();
-
-            // Bỏ qua data URI hoặc fragment
             if (resUrl.startsWith('data:') || resUrl.startsWith('#')) return match;
 
-            /* ------ Chuẩn hoá URL tuyệt đối ------ */
-            if (resUrl.startsWith('//')) {
-                resUrl = 'https:' + resUrl;
-            } else if (!/^https?:\/\//i.test(resUrl)) {
-                // Đường dẫn /a/b.png hoặc a/b.png → ghép với base URL tương ứng
-                const baseRoot = remoteBaseMap[file] || defaultBaseUrl;
+            /* ---- Build an absolute URL like before --------------------------- */
+            if (resUrl.startsWith('//')) resUrl = 'https:' + resUrl;
+            else if (!/^https?:\/\//i.test(resUrl)) {
+                const base = remoteBaseMap[file] || defaultBaseUrl;
                 try {
-                    resUrl = new URL(resUrl, baseRoot).href;
+                    resUrl = new URL(resUrl, base).href;
                 } catch {
                     return match;
-                } // Không hợp lệ → giữ nguyên
+                }
             }
 
-            /* ------ Sinh tên file cục bộ ------ */
+            /* ---- Decide sub-folder, file name & final path ------------------- */
             const {
                 pathname
             } = new URL(resUrl);
             const ext = path.extname(pathname) || '.bin';
+            const subDir = getAssetSubDir(ext);
             const baseName = path.basename(pathname) || `file${ext}`;
 
-            let localName = baseName;
-            let count = 1;
-            while (fs.existsSync(path.join(assetDir, localName))) {
-                localName = `${path.parse(baseName).name}-${count++}${ext}`;
+            let localName = baseName,
+                c = 1;
+            const targetDir = path.join(assetDir, subDir);
+            if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, {
+                recursive: true
+            });
+
+            while (fs.existsSync(path.join(targetDir, localName))) {
+                localName = `${path.parse(baseName).name}-${c++}${ext}`;
             }
 
-            const localPath = path.join(assetDir, localName);
+            const localPath = path.join(targetDir, localName);
 
-            /* ------ Tải về nếu chưa có ------ */
+            /* ---- Download if we have not done so already ---------------------- */
             if (!fs.existsSync(localPath)) {
                 try {
                     execSync(`wget -q -O "${localPath}" "${resUrl}"`, {
@@ -246,16 +257,15 @@ async function processCSS(cssDir, assetDir, defaultBaseUrl, remoteBaseMap = {}) 
                     });
                 } catch {
                     console.warn(`Không thể tải: ${resUrl}`);
-                    return match; // Giữ nguyên nếu lỗi
+                    return match;
                 }
             }
 
-            /* ------ Tính lại đường dẫn trong CSS ------ */
-            // cssPath: dist/css/foo.css   ->   assetDir: dist/asset
+            /* ---- Rewrite URL relative to the current css/xx.css -------------- */
             const rel = path.posix.relative(
-                path.posix.dirname(`/css/${file}`), // "/css" để giữ nguyên separator posix
-                `/asset/${localName}`
-            ); // kết quả: "../asset/<file>"
+                path.posix.dirname(`/css/${file}`),
+                `/asset/${subDir}/${localName}`
+            );
 
             modified = true;
             return `url(${quote}${rel}${quote})`;
@@ -266,4 +276,16 @@ async function processCSS(cssDir, assetDir, defaultBaseUrl, remoteBaseMap = {}) 
             console.log(`✓ Đã cập nhật ${file}`);
         }
     }
+}
+
+/* ===================================================================== */
+/* 1)  Helper: decide sub-folder name from file extension                 */
+/* ===================================================================== */
+function getAssetSubDir(ext) {
+    ext = ext.toLowerCase();
+    if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico'].includes(ext)) return 'img';
+    if (['.ttf', '.otf', '.woff', '.woff2', '.eot'].includes(ext)) return 'font';
+    if (['.mp4', '.webm', '.m4v', '.avi', '.mov'].includes(ext)) return 'video';
+    if (['.mp3', '.ogg', '.wav'].includes(ext)) return 'audio';
+    return 'misc'; // everything else – keep it but isolate it
 }
