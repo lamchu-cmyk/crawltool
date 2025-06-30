@@ -90,6 +90,12 @@ async function processHTML(distDir, baseUrl) {
 
     /* ===== 2. INLINE <script> ===== */
     $('script:not([src])').each((i, el) => {
+        const type = ($(el).attr('type') || '').trim().toLowerCase();
+
+        // Nếu là JSON-LD, template, ld+json … thì giữ nguyên
+        if (type && type !== 'text/javascript' && type !== 'application/javascript') return;
+
+        // Phần còn lại mới tách ra file
         const jsContent = $(el).html();
         const fileName = `inline-${i + 1}.js`;
         fs.writeFileSync(path.join(jsDir, fileName), jsContent);
