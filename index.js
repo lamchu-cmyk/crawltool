@@ -164,63 +164,74 @@ async function downloadAndSwap($node, attrName, remoteUrl, saveDir) {
 /* ----------------- HÀM QUÉT CSS VÀ TẢI ẢNH ----------------- */
 async function processCSS(cssDir, assetDir, baseUrl) {
     const cssFiles = fs.readdirSync(cssDir).filter(f => f.endsWith('.css'));
-    const urlRegex = /url\(([^)]+)\)/g;
 
-    for (const fileName of cssFiles) {
-        const cssPath = path.join(cssDir, fileName);
+    // Regex mới: cho phép khoảng trắng + ngoặc kép
+    const urlRegex = /url\(\s*(['"]?)([^'")]+)\1\s*\)/g;
+
+    for (const file of cssFiles) {
+        const cssPath = path.join(cssDir, file);
         let content = fs.readFileSync(cssPath, 'utf-8');
-        let changed = false;
+        let modified = false;
 
-        content = content.replace(urlRegex, (match, p1) => {
-            let resourceUrl = p1.trim().replace(/^['"]|['"]$/g, '');
+        content = content.replace(urlRegex, (match, quote, raw) => {
+            let resUrl = raw.trim();
 
-            // Bỏ qua data URI hoặc anchor
-            if (resourceUrl.startsWith('data:') || resourceUrl.startsWith('#')) return match;
+            // Bỏ qua data URI hoặc fragment
+            if (resUrl.startsWith('data:') || resUrl.startsWith('#')) return match;
 
-            // Chuẩn hoá URL tuyệt đối
-            if (resourceUrl.startsWith('//')) {
-                resourceUrl = 'https:' + resourceUrl;
-            } else if (!/^https?:\/\//i.test(resourceUrl)) {
-                // Đường tương đối -> ghép với baseUrl gốc
+            /* ------ Chuẩn hoá URL tuyệt đối ------ */
+            if (resUrl.startsWith('//')) {
+                resUrl = 'https:' + resUrl;
+            } else if (!/^https?:\/\//i.test(resUrl)) {
+                // Đường dẫn /a/b.png hoặc a/b.png → ghép với baseUrl
                 try {
-                    resourceUrl = new URL(resourceUrl, baseUrl).href;
+                    resUrl = new URL(resUrl, baseUrl).href;
                 } catch {
                     return match;
-                }
+                } // Không hợp lệ → giữ nguyên
             }
 
-            // Xác định tên file cục bộ
-            const parsed = new URL(resourceUrl);
-            const ext = path.extname(parsed.pathname) || '.bin';
-            const baseName = path.basename(parsed.pathname) || `file${ext}`;
-            let local = baseName;
-            let counter = 1;
-            while (fs.existsSync(path.join(assetDir, local))) {
-                local = `${path.parse(baseName).name}-${counter++}${ext}`;
+            /* ------ Sinh tên file cục bộ ------ */
+            const {
+                pathname
+            } = new URL(resUrl);
+            const ext = path.extname(pathname) || '.bin';
+            const baseName = path.basename(pathname) || `file${ext}`;
+
+            let localName = baseName;
+            let count = 1;
+            while (fs.existsSync(path.join(assetDir, localName))) {
+                localName = `${path.parse(baseName).name}-${count++}${ext}`;
             }
 
-            const localPath = path.join(assetDir, local);
+            const localPath = path.join(assetDir, localName);
 
-            // Tải về (nếu chưa tồn tại)
+            /* ------ Tải về nếu chưa có ------ */
             if (!fs.existsSync(localPath)) {
                 try {
-                    execSync(`wget -q -O "${localPath}" "${resourceUrl}"`, {
+                    execSync(`wget -q -O "${localPath}" "${resUrl}"`, {
                         stdio: 'ignore'
                     });
                 } catch {
-                    console.warn(`Không thể tải: ${resourceUrl}`);
-                    return match; // Giữ nguyên nếu tải lỗi
+                    console.warn(`Không thể tải: ${resUrl}`);
+                    return match; // Giữ nguyên nếu lỗi
                 }
             }
 
-            changed = true;
-            const rel = path.posix.join('..', 'asset', local); // ../asset/<file>
-            return `url(${rel})`;
+            /* ------ Tính lại đường dẫn trong CSS ------ */
+            // cssPath: dist/css/foo.css   ->   assetDir: dist/asset
+            const rel = path.posix.relative(
+                path.posix.dirname(`/css/${file}`), // "/css" để giữ nguyên separator posix
+                `/asset/${localName}`
+            ); // kết quả: "../asset/<file>"
+
+            modified = true;
+            return `url(${quote}${rel}${quote})`;
         });
 
-        if (changed) {
+        if (modified) {
             fs.writeFileSync(cssPath, content, 'utf-8');
-            console.log(`Đã cập nhật ${fileName}`);
+            console.log(`✓ Đã cập nhật ${file}`);
         }
     }
 }
