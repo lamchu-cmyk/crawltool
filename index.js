@@ -157,6 +157,9 @@ async function processHTML(distDir, baseUrl) {
     // === BỔ SUNG: Quét CSS và tải ảnh còn thiếu ===
     await processCSS(cssDir, assetDir, baseUrl, cssRemoteBaseMap);
     console.log('Đã quét CSS và tải tài nguyên còn thiếu!');
+
+    // BÁO CÁO TỔNG HỢP ↓
+    reportMissing(baseUrl);
 }
 
 /* ----------------- HÀM TẢI FILE CDN ----------------- */
@@ -185,15 +188,28 @@ async function downloadAndSwap($node, attrName, remoteUrl, saveDir) {
 
     /* ---- 3. Download & write ------------------------------------------------ */
     try {
-        const { data } = await axios.get(remoteUrl, {
+        const {
+            data
+        } = await axios.get(remoteUrl, {
             responseType: 'arraybuffer',
             // Một số CDN yêu cầu UA; thêm nhẹ cho chắc
-            headers: { 'User-Agent': 'Mozilla/5.0 (crawltool)' }
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (crawltool)'
+            }
         });
         fs.writeFileSync(path.join(targetDir, finalName), data);
     } catch (err) {
-        console.warn(`Không thể tải ${remoteUrl}: ${err.response?.status || err.message}`);
-        return null;          // báo về "không thành công" nhưng KHÔNG quăng lỗi
+        const reason = err.response ?.status || err.code || err.message;
+        console.warn(`Không thể tải ${remoteUrl}: ${reason}`);
+
+        // GHI NHẬT KÝ LỖI ↓
+        failedAssets.push({
+            type: path.basename(saveDir),
+            url: remoteUrl,
+            reason
+        });
+
+        return null; // vẫn không ném lỗi ra ngoài
     }
 
     /* ---- 4.  Update the DOM attribute so it points to the new file ---------- */
@@ -266,7 +282,15 @@ async function processCSS(cssDir, assetDir, defaultBaseUrl, remoteBaseMap = {}) 
                     });
                 } catch {
                     console.warn(`Không thể tải: ${resUrl}`);
-                    return match;
+
+                    // GHI NHẬT KÝ LỖI ↓
+                    failedAssets.push({
+                        type: subDir,
+                        url: resUrl,
+                        reason: 'wget failed'
+                    });
+
+                    return match; // giữ nguyên URL cũ
                 }
             }
 
@@ -297,4 +321,48 @@ function getAssetSubDir(ext) {
     if (['.mp4', '.webm', '.m4v', '.avi', '.mov'].includes(ext)) return 'video';
     if (['.mp3', '.ogg', '.wav'].includes(ext)) return 'audio';
     return 'misc'; // everything else – keep it but isolate it
+}
+
+// ===== THÊM MỚI / THAY ĐỔI PHẦN BÁO CÁO LỖI =========================
+const failedAssets = []; // <── ghi các lần tải hỏng
+function reportMissing(siteUrl) {
+    /* 1. Bảo đảm thư mục log tồn tại */
+    const logDir = path.join(__dirname, 'log');
+    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, {
+        recursive: true
+    });
+
+    /* 2. Tạo tên file từ hostname */
+    let hostname;
+    try {
+        hostname = new URL(siteUrl).hostname || siteUrl;
+    } catch {
+        hostname = siteUrl.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    }
+    const logPath = path.join(logDir, `${hostname}.log`);
+
+    /* 3. Ghi nội dung log */
+    if (!failedAssets.length) {
+        const okMsg = `✓ Không có tài nguyên nào bị thiếu cho ${siteUrl}\n`;
+        fs.writeFileSync(logPath, okMsg, 'utf-8');
+        console.log(okMsg.trim());
+        console.log(`Đã ghi log vào ${logPath}`);
+        return;
+    }
+
+    let content = `⨯ Những tài nguyên sau không tải được cho ${siteUrl}:\n`;
+    failedAssets.forEach(({
+        type,
+        url,
+        reason
+    }, i) => {
+        const line = `${i + 1}. [${type}] ${url} → ${reason}`;
+        console.warn(line);
+        content += line + '\n';
+    });
+    content += '──────────────────────────────────────────────\n';
+
+    fs.writeFileSync(logPath, content, 'utf-8');
+    console.warn('──────────────────────────────────────────────\n');
+    console.log(`Đã ghi log vào ${logPath}`);
 }
