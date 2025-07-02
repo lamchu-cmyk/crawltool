@@ -128,8 +128,18 @@ async function processHTML(distDir, baseUrl) {
     /* ===== 4. CDN ảnh/gif/video ===== */
     const imgSelectors = ['img[src]', 'source[src]', 'video[src]'];
     $(imgSelectors.join(',')).each((i, el) => {
-        const src = $(el).attr('src');
-        if (/^https?:\/\//i.test(src) || src.startsWith('//')) {
+        let src = $(el).attr('src');
+        if (!src) return;
+
+        // Chuẩn hoá URL về dạng đầy đủ:
+        if (src.startsWith('//')) src = 'https:' + src; // protocol-relative
+        else if (src.startsWith('/')) { // root-relative
+            try {
+                src = new URL(src, baseUrl).href;
+            } catch {} // --> https://domain/…
+        }
+
+        if (/^https?:\/\//i.test(src)) {
             tasks.push(downloadAndSwap($(el), 'src', src, assetDir));
         }
     });
