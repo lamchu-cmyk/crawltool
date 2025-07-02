@@ -134,7 +134,11 @@ async function processHTML(distDir, baseUrl) {
         }
     });
 
-    const taskResults = await Promise.all(tasks);
+    // Chờ tất cả hoàn thành, kể cả lỗi
+    const settled = await Promise.allSettled(tasks);
+    const taskResults = settled
+        .filter(r => r.status === 'fulfilled' && r.value) // bỏ reject & null
+        .map(r => r.value);
 
     /* -------- Lập map base URL cho từng file CSS từ CDN -------- */
     const cssRemoteBaseMap = {};
@@ -180,12 +184,17 @@ async function downloadAndSwap($node, attrName, remoteUrl, saveDir) {
     }
 
     /* ---- 3. Download & write ------------------------------------------------ */
-    const {
-        data
-    } = await axios.get(remoteUrl, {
-        responseType: 'arraybuffer'
-    });
-    fs.writeFileSync(path.join(targetDir, finalName), data);
+    try {
+        const { data } = await axios.get(remoteUrl, {
+            responseType: 'arraybuffer',
+            // Một số CDN yêu cầu UA; thêm nhẹ cho chắc
+            headers: { 'User-Agent': 'Mozilla/5.0 (crawltool)' }
+        });
+        fs.writeFileSync(path.join(targetDir, finalName), data);
+    } catch (err) {
+        console.warn(`Không thể tải ${remoteUrl}: ${err.response?.status || err.message}`);
+        return null;          // báo về "không thành công" nhưng KHÔNG quăng lỗi
+    }
 
     /* ---- 4.  Update the DOM attribute so it points to the new file ---------- */
     const relPath = path.posix.relative(
