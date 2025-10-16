@@ -160,6 +160,9 @@ async function processHTML(distDir, baseUrl) {
         }
     });
 
+    /* ---------- Chuẩn hóa lại cấu trúc HTML ---------- */
+    normalizeHTML($);
+
     /* ---------- Ghi lại HTML đã chỉnh ---------- */
     fs.writeFileSync(htmlPath, $.html(), 'utf-8');
     console.log('Đã cập nhật index.html');
@@ -170,6 +173,58 @@ async function processHTML(distDir, baseUrl) {
 
     // BÁO CÁO TỔNG HỢP ↓
     reportMissing(baseUrl);
+}
+
+/* ================== CHUẨN HÓA HTML HOÀN CHỈNH ================== */
+function normalizeHTML($) {
+    // Tạo <html>, <head>, <body> nếu chưa có
+    let $html = $('html');
+    if ($html.length === 0) {
+        const all = $.root().children().detach();
+        $html = $('<html></html>').appendTo($.root());
+        $html.append(all);
+    }
+    let $head = $html.children('head');
+    if ($head.length === 0) {
+        $head = $('<head></head>');
+        $html.prepend($head);
+    }
+    let $body = $html.children('body');
+    if ($body.length === 0) {
+        $body = $('<body></body>');
+        $html.append($body);
+    }
+
+    // Gom các thẻ head/body về đúng vị trí
+    // Các thẻ head: title, meta, link, style, script[type="application/ld+json"], base
+    const headTags = ['title', 'meta', 'link', 'style', 'base'];
+    // script đặc biệt
+    $('script').each((_, el) => {
+        const type = ($(el).attr('type') || '').trim().toLowerCase();
+        if (type === 'application/ld+json') {
+            $head.append($(el).detach());
+        }
+    });
+    headTags.forEach(tag => {
+        $html.children(tag).appendTo($head);
+        $body.children(tag).appendTo($head);
+        $.root().children(tag).appendTo($head);
+    });
+
+    // Các thẻ body: div, section, main, header, footer, nav, article, aside, img, video, etc.
+    // Đưa tất cả thẻ không thuộc headTags vào body (trừ html/head/body)
+    $html.children().each((_, el) => {
+        const tag = el.tagName && el.tagName.toLowerCase();
+        if (!['head', 'body'].includes(tag) && !headTags.includes(tag)) {
+            $body.append($(el).detach());
+        }
+    });
+    $.root().children().each((_, el) => {
+        const tag = el.tagName && el.tagName.toLowerCase();
+        if (!['html', 'head', 'body'].includes(tag) && !headTags.includes(tag)) {
+            $body.append($(el).detach());
+        }
+    });
 }
 
 /* ----------------- HÀM TẢI FILE CDN ----------------- */
