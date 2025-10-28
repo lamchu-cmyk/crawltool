@@ -1,3 +1,3 @@
 # crawltool
 
-Yeah, a clone website tool using wget bruh
+A clone website tool using wget
